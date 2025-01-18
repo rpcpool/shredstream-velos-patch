@@ -1,10 +1,10 @@
 [package]
 name = "jito-protos"
-version = { workspace = true }
 description = "Protobufs for working with block engine"
-authors = { workspace = true }
-homepage = { workspace = true }
-edition = { workspace = true }
+version = "0.2.2"
+authors = ["Jito Team <team@jito.wtf>"]
+homepage = "https://jito.wtf/"
+edition = "2021"
 publish = false
 
 [dependencies]

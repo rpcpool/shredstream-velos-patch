@@ -1,14 +1,13 @@
 [package]
 name = "jito-shredstream-proxy"
-version = { workspace = true }
+version = "0.2.2"
 description = "Fast path to receive shreds from Jito, forwarding to local consumers. See https://jito-labs.gitbook.io/mev/searcher-services/shredstream for details."
-authors = { workspace = true }
-homepage = { workspace = true }
-edition = { workspace = true }
+authors = ["Jito Team <team@jito.wtf>"]
+homepage = "https://jito.wtf/"
+edition = "2021"
 
 [dependencies]
 arc-swap = { workspace = true }
-clap = { workspace = true }
 crossbeam-channel = { workspace = true }
 dashmap = { workspace = true }
 env_logger = { workspace = true }
@@ -31,3 +30,7 @@ solana-streamer = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
+
+[lib]
+name = "jito_shredstream_proxy"
+path = "src/lib.rs"
