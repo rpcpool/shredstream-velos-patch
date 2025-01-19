@@ -2,49 +2,69 @@ use std::{
     net::{IpAddr, Ipv4Addr},
     str::FromStr,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU64, Ordering},
         Arc,
     },
-    thread::JoinHandle,
+    thread,
     time::Duration,
 };
 
+use crossbeam_channel::tick;
 use jito_protos::{
     shared::Socket,
     shredstream::{shredstream_client::ShredstreamClient, Heartbeat},
 };
 use tokio::runtime::Runtime;
-use tonic::{service::interceptor::InterceptedService, transport::Channel};
-use tracing::info;
+use tonic::{service::interceptor::InterceptedService, transport::Channel, Code};
+use tracing::{error, info, warn};
 
-use crate::{error::ShredstreamError, token_auth::ClientInterceptor};
+use crate::{error::ShredstreamError, threads::ThreadManager, token_auth::ClientInterceptor};
+
+pub struct HeartbeatConfig {
+    pub regions: Vec<String>,
+    pub bind_addr: IpAddr,
+    pub bind_port: u16,
+}
 
 pub struct HeartbeatManager {
     client: ShredstreamClient<InterceptedService<Channel, ClientInterceptor>>,
-    regions: Vec<String>,
+    config: HeartbeatConfig,
     socket: Socket,
-    exit: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+    thread_manager: ThreadManager,
+    stats: Arc<HeartbeatStats>,
+}
+
+struct HeartbeatStats {
+    successful_heartbeats: AtomicU64,
+    failed_heartbeats: AtomicU64,
+    client_restarts: AtomicU64,
+}
+
+impl HeartbeatStats {
+    fn new() -> Self {
+        Self {
+            successful_heartbeats: AtomicU64::new(0),
+            failed_heartbeats: AtomicU64::new(0),
+            client_restarts: AtomicU64::new(0),
+        }
+    }
 }
 
 impl HeartbeatManager {
     pub fn new(
         client: ShredstreamClient<InterceptedService<Channel, ClientInterceptor>>,
-        regions: Vec<String>,
-        bind_addr: IpAddr,
-        bind_port: u16,
-        exit: Arc<AtomicBool>,
+        config: HeartbeatConfig,
     ) -> Result<Self, ShredstreamError> {
-        let ip = if bind_addr.is_unspecified() {
+        let ip = if config.bind_addr.is_unspecified() {
             get_public_ip()?.to_string()
         } else {
-            info!("Using provided bind address: {}", bind_addr);
-            bind_addr.to_string()
+            info!("Using provided bind address: {}", config.bind_addr);
+            config.bind_addr.to_string()
         };
 
         let socket = Socket {
             ip,
-            port: bind_port as i64,
+            port: config.bind_port as i64,
         };
 
         info!(
@@ -54,60 +74,78 @@ impl HeartbeatManager {
 
         Ok(Self {
             client,
-            regions,
+            config,
             socket,
-            exit,
-            thread: None,
+            thread_manager: ThreadManager::new(),
+            stats: Arc::new(HeartbeatStats::new()),
         })
     }
 
     pub fn start(&mut self, runtime: &Runtime) -> Result<(), ShredstreamError> {
         let client = self.client.clone();
-        let regions = self.regions.clone();
+        let regions = self.config.regions.clone();
         let socket = self.socket.clone();
-        let exit = self.exit.clone();
         let runtime = runtime.handle().clone();
+        let stats = Arc::clone(&self.stats);
 
-        info!("Starting heartbeat thread for regions: {:?}", regions);
+        self.thread_manager
+            .spawn("heartbeat", move |exit, shutdown_rx| {
+                let mut heartbeat_interval = Duration::from_secs(1);
+                let mut heartbeat_tick = tick(heartbeat_interval);
+                let metrics_tick = tick(Duration::from_secs(30));
 
-        let thread = std::thread::Builder::new()
-            .name("heartbeat".into())
-            .spawn(move || {
                 while !exit.load(Ordering::Relaxed) {
-                    let heartbeat = Heartbeat {
-                        socket: Some(socket.clone()),
-                        regions: regions.clone(),
-                    };
+                    crossbeam_channel::select! {
+                        recv(heartbeat_tick) -> _ => {
+                            let heartbeat = Heartbeat {
+                                socket: Some(socket.clone()),
+                                regions: regions.clone(),
+                            };
 
-                    match runtime.block_on(client.clone().send_heartbeat(heartbeat)) {
-                        Ok(_) => {
-                            info!("Heartbeat sent successfully");
+                            match runtime.block_on(client.clone().send_heartbeat(heartbeat)) {
+                                Ok(response) => {
+                                    stats.successful_heartbeats.fetch_add(1, Ordering::Relaxed);
+
+                                    // Update heartbeat interval based on server response
+                                    let new_interval = Duration::from_millis(
+                                        (response.get_ref().ttl_ms / 3) as u64
+                                    );
+                                    if heartbeat_interval != new_interval {
+                                        info!("Adjusting heartbeat interval to {:?}", new_interval);
+                                        heartbeat_interval = new_interval;
+                                        heartbeat_tick = tick(new_interval);
+                                    }
+                                }
+                                Err(status) => {
+                                    if status.code() == Code::InvalidArgument {
+                                        error!("Invalid heartbeat arguments: {}", status);
+                                        break;
+                                    }
+                                    stats.failed_heartbeats.fetch_add(1, Ordering::Relaxed);
+                                    warn!("Heartbeat failed: {}", status);
+                                    thread::sleep(Duration::from_secs(5));
+                                }
+                            }
                         }
-                        Err(e) => {
-                            tracing::warn!("Heartbeat failed: {}", e);
+                        recv(metrics_tick) -> _ => {
+                            info!(
+                                "Heartbeat stats: success={}, failures={}, restarts={}",
+                                stats.successful_heartbeats.load(Ordering::Relaxed),
+                                stats.failed_heartbeats.load(Ordering::Relaxed),
+                                stats.client_restarts.load(Ordering::Relaxed)
+                            );
                         }
+                        recv(shutdown_rx) -> _ => break,
                     }
-
-                    std::thread::sleep(Duration::from_secs(1));
                 }
-                info!("Heartbeat thread exiting");
-            })?;
+            });
 
-        self.thread = Some(thread);
         Ok(())
     }
 
     pub fn shutdown(&mut self) {
-        self.exit.store(true, Ordering::SeqCst);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
-impl Drop for HeartbeatManager {
-    fn drop(&mut self) {
-        self.shutdown();
+        info!("Shutting down HeartbeatManager");
+        self.thread_manager.shutdown();
     }
 }
 

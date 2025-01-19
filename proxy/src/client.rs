@@ -1,51 +1,44 @@
-use std::{
-    io,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    thread::sleep,
-    time::Duration,
-};
-
-use crossbeam_channel::{unbounded, Receiver, Sender};
-use signal_hook::consts::{SIGINT, SIGTERM};
+use crossbeam_channel::Receiver;
 use solana_perf::packet::PacketBatch;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tokio::runtime::Runtime;
 use tracing::info;
 
 use crate::{
-    config::ClientConfig, error::ShredstreamError, heartbeat::HeartbeatManager,
-    receiver::ShredReceiver, token_auth::TokenAuthenticator,
+    config::ClientConfig,
+    error::ShredstreamError,
+    heartbeat::{HeartbeatConfig, HeartbeatManager},
+    receiver::{ReceiverConfig, ShredReceiver},
+    threads::ThreadManager,
+    token_auth::TokenAuthenticator,
 };
 
 pub struct JitoShredsClient {
     config: ClientConfig,
     runtime: Arc<Runtime>,
-    exit: Arc<AtomicBool>,
-    shutdown_receiver: Option<Receiver<()>>,
+    thread_manager: ThreadManager,
+    heartbeat_manager: Option<HeartbeatManager>,
+    shred_receiver: Option<ShredReceiver>,
+    shutdown_initiated: AtomicBool,
 }
 
 impl JitoShredsClient {
     pub fn new(config: ClientConfig, runtime: Arc<Runtime>) -> Result<Self, ShredstreamError> {
-        let exit = Arc::new(AtomicBool::new(false));
-        let (_, shutdown_receiver) = Self::setup_shutdown_signal(exit.clone())?;
-
         Ok(Self {
             config,
             runtime,
-            exit,
-            shutdown_receiver: Some(shutdown_receiver),
+            thread_manager: ThreadManager::new(),
+            heartbeat_manager: None,
+            shred_receiver: None,
+            shutdown_initiated: AtomicBool::new(false),
         })
     }
 
-    pub fn start(&self) -> Result<Receiver<PacketBatch>, ShredstreamError> {
+    pub fn start(&mut self) -> Result<Receiver<PacketBatch>, ShredstreamError> {
         info!("Starting JitoShredsClient...");
-        let (sender, receiver) = unbounded();
-        let shutdown_receiver = self
-            .shutdown_receiver
-            .as_ref()
-            .expect("Shutdown receiver not initialized");
 
         info!("Initializing authentication...");
         let auth = TokenAuthenticator::new(
@@ -58,53 +51,57 @@ impl JitoShredsClient {
         let shredstream_client = auth.create_shredstream_client()?;
 
         info!("Starting heartbeat manager...");
-        let mut heartbeat = HeartbeatManager::new(
-            shredstream_client,
-            self.config.desired_regions.clone(),
-            self.config.bind_addr,
-            self.config.bind_port,
-            self.exit.clone(),
-        )?;
+        let heartbeat_config = HeartbeatConfig {
+            regions: self.config.desired_regions.clone(),
+            bind_addr: self.config.bind_addr,
+            bind_port: self.config.bind_port,
+        };
+
+        let mut heartbeat = HeartbeatManager::new(shredstream_client, heartbeat_config)?;
         heartbeat.start(&self.runtime)?;
+        self.heartbeat_manager = Some(heartbeat);
 
         info!("Starting shred receiver...");
-        let shred_receiver = ShredReceiver::new(
-            self.config.bind_addr,
-            self.config.bind_port,
-            self.config.num_threads,
-            sender,
-            self.exit.clone(),
-            self.config.deduper_size,
-            self.config.deduper_false_positive_rate,
-        )?;
-        shred_receiver.start(shutdown_receiver)?;
+        let receiver_config = ReceiverConfig {
+            bind_addr: self.config.bind_addr,
+            bind_port: self.config.bind_port,
+            num_threads: self.config.num_threads,
+            deduper_size: self.config.deduper_size,
+            deduper_false_positive_rate: self.config.deduper_false_positive_rate,
+            ring_buffer_size: 10_000,
+        };
+
+        let mut shred_receiver = ShredReceiver::new(receiver_config)?;
+        let packet_receiver = shred_receiver.start()?;
+        self.shred_receiver = Some(shred_receiver);
 
         info!("JitoShredsClient initialization complete");
-        Ok(receiver)
+        Ok(packet_receiver)
     }
 
-    fn setup_shutdown_signal(exit: Arc<AtomicBool>) -> io::Result<(Sender<()>, Receiver<()>)> {
-        let (s, r) = crossbeam_channel::bounded(256);
-        let mut signals = signal_hook::iterator::Signals::new([SIGINT, SIGTERM])?;
-        let s_thread = s.clone();
+    pub fn shutdown(&mut self) {
+        if self
+            .shutdown_initiated
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            info!("Initiating shutdown sequence");
 
-        std::thread::spawn(move || {
-            for _ in signals.forever() {
-                exit.store(true, Ordering::SeqCst);
-                // Send shutdown signal multiple times for all threads
-                for _ in 0..256 {
-                    if s_thread.send(()).is_err() {
-                        break;
-                    }
-                }
+            if let Some(mut heartbeat) = self.heartbeat_manager.take() {
+                info!("Shutting down heartbeat manager");
+                heartbeat.shutdown();
             }
-        });
 
-        Ok((s, r))
-    }
-    pub fn shutdown(&self) {
-        self.exit.store(true, Ordering::SeqCst);
-        sleep(Duration::from_millis(1500));
+            if let Some(mut receiver) = self.shred_receiver.take() {
+                info!("Shutting down shred receiver");
+                receiver.shutdown();
+            }
+
+            info!("Shutting down main thread manager");
+            self.thread_manager.shutdown();
+
+            info!("Shutdown complete");
+        }
     }
 }
 
