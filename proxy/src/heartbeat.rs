@@ -13,11 +13,10 @@ use jito_protos::{
     auth::{auth_service_client::AuthServiceClient, Role},
     shredstream::{shredstream_client::ShredstreamClient, Heartbeat},
 };
-use log::{info, warn};
-use solana_metrics::{datapoint_info, datapoint_warn};
 use solana_sdk::signature::Keypair;
 use tokio::runtime::Runtime;
 use tonic::{codegen::InterceptedService, transport::Channel, Code};
+use tracing::{info, warn};
 
 use crate::{
     forwarder::ShredMetrics,
@@ -101,12 +100,6 @@ pub fn heartbeat_loop_thread(
                 Err(e) => {
                     warn!("Failed to connect to block engine, retrying. Error: {e}");
                     client_restart_count += 1;
-                    datapoint_warn!(
-                        "shredstream_proxy-heartbeat_client_error",
-                        "block_engine_url" => block_engine_url,
-                        ("errors", 1, i64),
-                        ("error_str", e.to_string(), String),
-                    );
                     sleep(Duration::from_secs(5));
                     continue; // avoid sending heartbeat, try acquiring grpc client again
                 }
@@ -137,12 +130,6 @@ pub fn heartbeat_loop_thread(
                                     panic!("Invalid arguments: {err}.");
                                 };
                                 warn!("Error sending heartbeat: {err}");
-                                datapoint_warn!(
-                                    "shredstream_proxy-heartbeat_send_error",
-                                    "block_engine_url" => block_engine_url,
-                                    ("errors", 1, i64),
-                                    ("error_str", err.to_string(), String),
-                                );
                                 failed_heartbeat_count += 1;
                             }
                         }
@@ -150,31 +137,18 @@ pub fn heartbeat_loop_thread(
 
                     // send metrics and handle grpc connection failing
                     recv(metrics_tick) -> _ => {
-                        datapoint_info!(
-                            "shredstream_proxy-heartbeat_stats",
-                            "block_engine_url" => block_engine_url,
-                            ("successful_heartbeat_count", successful_heartbeat_count, i64),
-                            ("failed_heartbeat_count", failed_heartbeat_count, i64),
-                            ("client_restart_count", client_restart_count, i64),
-                        );
-
                         // handle scenario when grpc connection is open, but backend doesn't receive heartbeat
                         // possibly due to envoy losing track of the pod when backend restarts.
                         // we restart our grpc connection to work around the stale connection
                         // if no shreds received, then restart
-                        let new_received_count = metrics.agg_received_cumulative.load(Ordering::Relaxed);
+                        let new_received_count = metrics.received.load(Ordering::Relaxed);
                         if new_received_count == last_cumulative_received_shred_count {
                             warn!("No shreds received recently, restarting heartbeat client.");
-                            datapoint_warn!(
-                                "shredstream_proxy-heartbeat_restart_signal",
-                                "block_engine_url" => block_engine_url,
-                                ("desired_regions", format!("{desired_regions:?}"), String),
-                            );
+                        
                             refresh_thread_hdl.abort();
                             break;
                         }
                         last_cumulative_received_shred_count = new_received_count;
-
 
                         successful_heartbeat_count_cumulative += successful_heartbeat_count;
                         failed_heartbeat_count_cumulative += failed_heartbeat_count;

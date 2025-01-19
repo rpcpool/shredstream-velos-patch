@@ -12,7 +12,6 @@ use jito_protos::auth::{
     GenerateAuthTokensRequest, RefreshAccessTokenRequest, Role, Token,
 };
 use prost_types::Timestamp;
-use solana_metrics::datapoint_info;
 use solana_sdk::signature::{Keypair, Signer};
 use thiserror::Error;
 use tokio::{task::JoinHandle, time::sleep};
@@ -152,13 +151,6 @@ impl ClientInterceptor {
                             true
                         }
                     };
-                    datapoint_info!(
-                        "token_auth",
-                        ("auth_type", "full_auth", String),
-                        ("service", service_name, String),
-                        ("is_error", is_error, bool),
-                        ("latency_us", start.elapsed().as_micros(), i64),
-                    );
                     continue;
                 }
 
@@ -185,13 +177,6 @@ impl ClientInterceptor {
                         }
                     };
 
-                    datapoint_info!(
-                        "token_auth",
-                        ("auth_type", "access_token", String),
-                        ("service", service_name, String),
-                        ("is_error", is_error, bool),
-                        ("latency_us", start.elapsed().as_micros(), i64),
-                    );
                     continue;
                 }
 

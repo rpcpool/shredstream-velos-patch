@@ -12,34 +12,30 @@ edition = "2021"
 [profile.release]
 # thin has minimal overhead vs none (default): https://blog.llvm.org/2016/06/thinlto-scalable-and-incremental-lto.html
 lto = "thin"
+# better optimization
+codegen-units = 1
+# reduce binary size
+panic = "abort"
 
 [workspace.dependencies]
 arc-swap = "1.7.1"
 crossbeam-channel = "0.5.14"
 dashmap = "6.1.0"
-env_logger = "0.11"
 hostname = "0.4.0"
-itertools = "0.13.0"
 jito-protos = { path = "jito_protos" }
-log = "0.4"
 prost = "0.12"
 prost-types = "0.12"
-protobuf-src = "2"
-rand = "0.8"
-reqwest = { version = "0.11", features = ["blocking", "json"] }
-serde_json = "1"
-signal-hook = "0.3"
-solana-client = "2.0.16"
-solana-metrics = "2.0.16"
-solana-net-utils = "2.0.16"
-solana-perf = "2.0.16"
-solana-sdk = "2.0.16"
-solana-streamer = "2.0.16"
-thiserror = "1"
-tokio = "1"
-tonic = { version = "0.10", features = [
-    "tls",
-    "tls-roots",
-    "tls-webpki-roots",
-] }
+protobuf-src = "1.1.0+21.5"
+rand = "0.8.5"
+signal-hook = "0.3.17"
+solana-client = "2.0.21"
+solana-perf = "2.0.21"
+solana-sdk = "2.0.21"
+solana-streamer = "2.0.21"
+solana-net-utils = "2.0.21"
+thiserror = "2.0.11"
+tokio = { version = "1.43.0", features = ["rt-multi-thread", "macros"] }
+tonic = { version = "0.10", features = ["tls", "transport"] }
 tonic-build = "0.10"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
