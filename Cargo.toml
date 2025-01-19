@@ -32,8 +32,13 @@ solana-sdk = "2.0.21"
 solana-streamer = "2.0.21"
 solana-net-utils = "2.0.21"
 thiserror = "2.0.11"
+reqwest = { version = "0.11", features = ["blocking", "json"] }
 tokio = { version = "1.43.0", features = ["rt-multi-thread", "macros"] }
-tonic = { version = "0.10", features = ["tls", "transport"] }
+tonic = { version = "0.10", features = [
+    "tls",
+    "tls-roots",
+    "tls-webpki-roots",
+] }
 tonic-build = "0.10"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }

@@ -42,6 +42,10 @@ impl TokenAuthenticator {
         runtime: Arc<Runtime>,
     ) -> Result<Self, ShredstreamError> {
         let auth_url = auth_url.unwrap_or_else(|| block_engine_url.clone());
+
+        // Enter runtime context
+        let _guard = runtime.enter();
+
         let channel = runtime.block_on(async {
             create_grpc_channel(auth_url)
                 .await
@@ -61,6 +65,9 @@ impl TokenAuthenticator {
         &self,
     ) -> Result<ShredstreamClient<InterceptedService<Channel, ClientInterceptor>>, ShredstreamError>
     {
+        // Enter runtime context
+        let _guard = self.runtime.enter();
+
         let (interceptor, refresh_handle) = self
             .runtime
             .block_on(async {
@@ -79,13 +86,14 @@ impl TokenAuthenticator {
             refresh_handle.await.unwrap();
         });
 
-        let channel = self.runtime.block_on(async {
-            let channel = create_grpc_channel(self.block_engine_url.clone())
-                .await
-                .map_err(ShredstreamError::Transport)?;
-
-            Ok::<_, ShredstreamError>(channel)
-        })?;
+        let channel = {
+            let _guard = self.runtime.enter();
+            self.runtime.block_on(async {
+                create_grpc_channel(self.block_engine_url.clone())
+                    .await
+                    .map_err(ShredstreamError::Transport)
+            })?
+        };
 
         Ok(ShredstreamClient::with_interceptor(channel, interceptor))
     }

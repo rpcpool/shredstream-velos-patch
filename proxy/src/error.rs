@@ -21,4 +21,7 @@ pub enum ShredstreamError {
 
     #[error("Channel error: {0}")]
     Channel(String),
+
+    #[error("{0}")]
+    Other(String),
 }

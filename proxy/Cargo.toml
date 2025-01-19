@@ -25,6 +25,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 parking_lot = { workspace = true }
 signal-hook = { workspace = true }
+reqwest = { workspace = true }
 
 [lib]
 name = "jito_shredstream_proxy"

@@ -11,6 +11,7 @@ use std::{
     thread::JoinHandle,
     time::Duration,
 };
+use tracing::info;
 
 struct ThreadHandle {
     buffer: JoinHandle<()>,
@@ -79,6 +80,11 @@ impl ShredReceiver {
         let optimal_size = (deduper_size as f64 / deduper_false_positive_rate).ceil() as usize;
         // Align to cache line size (64 bytes typically)
         let aligned_size = (optimal_size + 63) & !63;
+
+        info!(
+            "Initializing ShredReceiver with deduper size: {} and deduper false positive rate: {}",
+            aligned_size, deduper_false_positive_rate
+        );
         Ok(Self {
             bind_addr,
             bind_port,

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crossbeam_channel::Receiver;
 use solana_perf::packet::PacketBatch;
 
@@ -12,8 +14,12 @@ pub mod types;
 pub use client::JitoShredsClient;
 pub use config::ClientConfig;
 pub use error::ShredstreamError;
+use tokio::runtime::Runtime;
 
-pub fn subscribe(config: ClientConfig) -> Result<Receiver<PacketBatch>, ShredstreamError> {
-    let client = JitoShredsClient::new(config)?;
+pub fn subscribe(
+    config: ClientConfig,
+    runtime: Arc<Runtime>,
+) -> Result<Receiver<PacketBatch>, ShredstreamError> {
+    let client = JitoShredsClient::new(config, runtime)?;
     client.start()
 }
