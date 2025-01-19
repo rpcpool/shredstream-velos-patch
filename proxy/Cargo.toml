@@ -10,13 +10,10 @@ edition = "2021"
 arc-swap = { workspace = true }
 crossbeam-channel = { workspace = true }
 dashmap = { workspace = true }
-hostname = { workspace = true }
 jito-protos = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 rand = { workspace = true }
-signal-hook = { workspace = true }
-solana-client = { workspace = true }
 solana-perf = { workspace = true }
 solana-sdk = { workspace = true }
 solana-streamer = { workspace = true }
@@ -26,6 +23,8 @@ tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+signal-hook = { workspace = true }
 
 [lib]
 name = "jito_shredstream_proxy"
